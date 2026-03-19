@@ -38,7 +38,7 @@ document.getElementById('btnClear').addEventListener('click'), function () {
 
 // ── fetch data ───────────────────────────────────────────────────
 function fetchData() {
-    return new Promise(fucntion(resolve){
+    return new Promise(function(resolve){
         // step 1: get cached data from background
         chrome.runtime.sendMessage({ type: 'POPUP_GET_DATA' }, function (resp) {
             var data = resp && resp.data;
@@ -100,7 +100,7 @@ function handleData(data) {
   renderFooter(data.url, data.ts);
 }
 
-─ Listen for live pushes while popup is open ───────────────────
+//─ Listen for live pushes while popup is open ───────────────────
 chrome.runtime.onMessage.addListener(function (msg) {
   if (msg && msg.type === 'AB_DATA_FROM_CONTENT') {
     handleData(msg.payload);
