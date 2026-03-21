@@ -2,9 +2,17 @@
   "manifest_version": 3,
   "name": "A/B Test Tracker",
   "version": "2.2.0",
-  "description": "Track active experiments, variants, and goal conversions for Convert, Optimizely, and VWO.",
-  "permissions": ["activeTab", "scripting", "tabs", "storage"],
-  "host_permissions": ["<all_urls>"],
+  "description": "Track active A/B experiments and goal conversions for Convert, Optimizely, and VWO. See your variation, experiment ID, and real-time goal fires.",
+  "homepage_url": "https://github.com/SARTHAK-RAUTELA/A-B_Testing_Tracker",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "tabs",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
@@ -15,16 +23,24 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_start",
       "all_frames": false
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["injected.js"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "injected.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ],
   "devtools_page": "devtools.html",
