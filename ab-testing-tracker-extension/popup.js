@@ -12,52 +12,52 @@ var currentTabId = null;
 
 // ── Tabs ────────────────────────────────────────────────────────
 document.querySelectorAll('.tab').forEach(function (tab) {
-    tab.addEventListener('click', function () {
-        document.querySelectorAll('.tab').forEach(function (t) { t.classList.remove('active'); });
-        document.querySelectorAll('.panel').forEach(function (p) { p.classList.remove('active'); });
-        tab.classList.add('active');
-        document.getElementById('p-' + tab.dataset.t).classList.add('active');
-    });
+  tab.addEventListener('click', function () {
+    document.querySelectorAll('.tab').forEach(function (t) { t.classList.remove('active'); });
+    document.querySelectorAll('.panel').forEach(function (p) { p.classList.remove('active'); });
+    tab.classList.add('active');
+    document.getElementById('p-' + tab.dataset.t).classList.add('active');
+  });
 });
 
-// ── refresh ──────────────────────────────────────────────────────
+// ── Refresh ──────────────────────────────────────────────────────
 document.getElementById('btnRefresh').addEventListener('click', function () {
-    var btn = this;
-    btn.classList.add('spin');
-    fetchData().finally(function () {
-        setTimeout(function () { btn.classList.remove('spin'); }, 500);
-    });
+  var btn = this;
+  btn.classList.add('spin');
+  fetchData().finally(function () {
+    setTimeout(function () { btn.classList.remove('spin'); }, 500);
+  });
 });
 
-// ── clear goals ───────────────────────────────────────────────────
-document.getElementById('btnClear').addEventListener('click'), function () {
-    localGoals = [];
-    renderGoals();
-    setBadge('gc', 0);
-}
+// ── Clear Goals ──────────────────────────────────────────────────
+document.getElementById('btnClear').addEventListener('click', function () {
+  localGoals = [];
+  renderGoals();
+  setBadge('gc', 0);
+});
 
-// ── fetch data ───────────────────────────────────────────────────
+// ── Fetch data ───────────────────────────────────────────────────
 function fetchData() {
-    return new Promise(function(resolve){
-        // step 1: get cached data from background
-        chrome.runtime.sendMessage({ type: 'POPUP_GET_DATA' }, function (resp) {
-            var data = resp && resp.data;
-            currentTabId = (resp && resp.tabId) || null;
-            if (data) {
-                handleData(data);
-            }
+  return new Promise(function (resolve) {
+    // Step 1: get cached data from background
+    chrome.runtime.sendMessage({ type: 'POPUP_GET_DATA' }, function (resp) {
+      var data = resp && resp.data;
+      currentTabId = (resp && resp.tabId) || null;
 
-            // step2: also ask the content script to re-scan and push fresh data
+      if (data) {
+        handleData(data);
+      }
 
-            if (currentTabId) {
-                chrome.tabs.sendMessage(currentTabId, { type: 'POPUP_WANTS_DATA' }, function () {
-                    // ignore errors (content script may not be ready yet)
-                    if (chrome.runtime.lastError) { }
-                });
-            }
+      // Step 2: also ask the content script to re-scan and push fresh data
+      if (currentTabId) {
+        chrome.tabs.sendMessage(currentTabId, { type: 'POPUP_WANTS_DATA' }, function () {
+          // ignore errors (content script may not be ready yet)
+          if (chrome.runtime.lastError) {}
+        });
+      }
 
-// If no data at all, try injecting content script manually (first open)
-if (!data && currentTabId) {
+      // If no data at all, try injecting content script manually (first open)
+      if (!data && currentTabId) {
         chrome.scripting.executeScript(
           { target: { tabId: currentTabId }, files: ['content.js'] },
           function () {
@@ -76,9 +76,8 @@ if (!data && currentTabId) {
         if (!data) showEmpty();
         resolve();
       }
-
-        })
-    })
+    });
+  });
 }
 
 // ── Handle incoming data ─────────────────────────────────────────
@@ -100,7 +99,7 @@ function handleData(data) {
   renderFooter(data.url, data.ts);
 }
 
-//─ Listen for live pushes while popup is open ───────────────────
+// ── Listen for live pushes while popup is open ───────────────────
 chrome.runtime.onMessage.addListener(function (msg) {
   if (msg && msg.type === 'AB_DATA_FROM_CONTENT') {
     handleData(msg.payload);
@@ -148,7 +147,6 @@ function renderExperiments(exps) {
     '</div>';
   }).join('');
 }
-
 
 // ── Goals ────────────────────────────────────────────────────────
 function renderGoals() {

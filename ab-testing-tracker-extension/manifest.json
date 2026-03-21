@@ -1,12 +1,12 @@
 {
   "manifest_version": 3,
   "name": "A/B Test Tracker",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Track active experiments, variants, and goal conversions for Convert, Optimizely, and VWO.",
   "permissions": ["activeTab", "scripting", "tabs", "storage"],
   "host_permissions": ["<all_urls>"],
   "action": {
-    "default_popup": "index.html",
+    "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
@@ -27,6 +27,7 @@
       "matches": ["<all_urls>"]
     }
   ],
+  "devtools_page": "devtools.html",
   "background": {
     "service_worker": "background.js"
   },
