@@ -33,27 +33,15 @@
 
 ## 🚀 How to Install in Chrome
 
-This extension is **not on the Chrome Web Store** — load it directly from your local files using Developer Mode.
+The easiest way — one click install, no setup needed.
 
-**Step 1** — Download or clone this repository:
-```bash
-git clone https://github.com/yourusername/ab-tracker-extension
-```
 
-**Step 2** — Open Chrome Extensions page:
-```
-chrome://extensions
-```
+Go to the Chrome Web Store listing (link here once published)
+Click "Add to Chrome"
+Navigate to any page with a Convert, Optimizely, or VWO test running
+Click the A/B TRACKER icon in your toolbar
 
-**Step 3** — Enable **Developer Mode** (toggle in the top-right corner)
 
-**Step 4** — Click **"Load unpacked"** → select the extension folder → click **Open**
-
-**Step 5** — (Optional) Pin the extension: click the 🧩 puzzle icon in Chrome toolbar → pin **A/B Test Tracker**
-
-**Step 6** — Navigate to any page running Convert, Optimizely, or VWO tests. Done!
-
-> ⚠️ After any code changes, go to `chrome://extensions` and click the **↻ refresh** icon on the extension card.
 
 ---
 
@@ -114,6 +102,22 @@ ab-tracker-extension/
 
 ---
 
+```
+Architecture Overview
+Page JS Context                 Isolated World              Background SW       DevTools Panel
+─────────────────               ──────────────              ─────────────       ──────────────
+injected.js                     content.js                  background.js       devtools.js
+  │                               │                               │                  │
+  ├─ reads window.convert         ├─ injects injected.js          ├─ stores          ├─ opens port
+  ├─ reads window.optimizely      ├─ listens postMessage          │  tabCache         ├─ sends INIT
+  ├─ reads window._vwo_exp        ├─ forwards to background       ├─ updates badge    │
+  ├─ hooks goal events            │                               ├─ pushes to panel  │
+  ├─ writes __abTrackerData       │                               │                  │
+  └─ postMessage(AB_DATA) ───────►└─ sendMessage ───────────────►└─ port.postMessage►└─ receiveData()
+                                                                                          │
+                                                                                       panel.js
+                                                                                       renders UI
+```
 
 ## 📝 Known Limitations
 
