@@ -128,9 +128,14 @@ injected.js                     content.js                  background.js       
 
 ---
 
-## 📄 License
+🔒 Privacy
+This extension:
 
-MIT License — free to use, modify, and distribute.
+✅ Collects zero user data
+✅ Makes no external network requests
+✅ Does not modify any page content
+✅ Only reads JavaScript variables set by A/B testing platforms already running on the page
+✅ All data stays local to your browser — nothing is sent anywhere
 
 ---
 
