@@ -6,6 +6,12 @@
 
 ---
 
+# Chrome Extension URL:
+
+https://chromewebstore.google.com/detail/gaedkhpgghmbpmljcakcdhgmncjeignp?utm_source=item-share-cb
+
+---
+
 ## ✨ Features
 
 | Feature | Description |
