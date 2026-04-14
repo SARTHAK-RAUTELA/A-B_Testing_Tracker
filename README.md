@@ -1,4 +1,5 @@
-# A/B Testing Tracker — Chrome Extension
+# A/B Testing Tracker — Chrome Extension ![Frame 13](https://github.com/user-attachments/assets/c7a4de01-79df-42ab-99a0-f1855ad87359)
+
 
 > **Real-time A/B test and goal tracking for Convert, Optimizely Web, and VWO**
 >
