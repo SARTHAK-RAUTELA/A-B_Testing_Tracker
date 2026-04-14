@@ -75,8 +75,7 @@ ab-tracker-extension/
 ├── background.js          # Service worker — caches data, manages DevTools port
 ├── content.js             # Isolated-world bridge — injects injected.js into page
 ├── injected.js            # Page-world script — reads window.convert / optimizely / VWO
-├── index.html             # Extension popup structure
-├── popup.css              # Extension popup UI
+├── popup.html             # Extension popup structure
 ├── devtools.html          # DevTools entry point
 ├── devtools.js            # Creates panel, opens port to background
 ├── panel.html             # DevTools panel HTML
