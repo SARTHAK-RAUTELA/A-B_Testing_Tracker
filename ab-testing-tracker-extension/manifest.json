@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "A/B Test Tracker",
-  "version": "2.2.1",
+  "version": "2.3.0",
   "description": "Track active A/B experiments and goal conversions for Convert, Optimizely, and VWO.",
   "homepage_url": "https://github.com/SARTHAK-RAUTELA/A-B_Testing_Tracker",
   "permissions": [
