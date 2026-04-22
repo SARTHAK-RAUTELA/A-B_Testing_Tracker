@@ -1,4 +1,4 @@
-<img width="148" height="138" alt="Frame 6" src="https://github.com/user-attachments/assets/c7a4de01-79df-42ab-99a0-f1855ad87359" />
+<img width="138" height="138" alt="Frame 6" src="https://github.com/user-attachments/assets/c7a4de01-79df-42ab-99a0-f1855ad87359" />
 
 
 # A/B Testing Tracker — Chrome Extension 
@@ -6,7 +6,7 @@
 
 > **Real-time A/B test and goal tracking for Convert, Optimizely Web, and VWO**
 >
-> by Sarthak Rautela · v2.2.0 · Manifest V3
+> by Sarthak Rautela · v2.3.5 · Manifest V3.5
 
 ---
 
@@ -28,6 +28,7 @@ https://chromewebstore.google.com/detail/gaedkhpgghmbpmljcakcdhgmncjeignp?utm_so
 | 🔢 Icon Badge | Green badge on the extension icon shows the count of active experiments |
 | 🔄 SPA Support | Detects route changes and re-scans automatically |
 | 🔎 Filter & Search | Filter experiments and goals by name, ID, or platform in the DevTools panel |
+| ✅ Goal Status Labels | Optimizely goals show **Tracked** or **Evaluated** so you know if a conversion was actually sent |
 
 ---
 
@@ -36,8 +37,43 @@ https://chromewebstore.google.com/detail/gaedkhpgghmbpmljcakcdhgmncjeignp?utm_so
 | Platform | Experiment Detection | Goal Detection |
 |---|---|---|
 | **Convert.com** | `currentData.experiences`, `_conv_r`, `_conv_v` cookie, `convert.data` | `goal.triggered` event, network beacon, console log intercept |
-| **Optimizely Web** | `getCampaignStates`, `getExperimentStates`, `campaignDecided` listener | `analytics trackEvent` listener, push hook, logx.optimizely.com beacon |
+| **Optimizely Web** | `getCampaignStates`, `getExperimentStates`, `campaignDecided` listener | `analytics trackEvent` listener, push hook, logx.optimizely.com beacon, own click listener |
 | **VWO** | `_vwo_exp`, `onVariationApplied` callback, `_vis_opt_exp_*_combi` cookie | `_vis_opt_exp_*_goal_*` cookie polling (500ms), `_vis_opt_goal_conversion` hook |
+
+---
+
+## 🎯 Optimizely Goal Status — Tracked vs Evaluated
+
+When Optimizely is detected on the page, every goal in the **Goals Fired** tab shows a colour-coded status label:
+
+| Label | Colour | What it means |
+|---|---|---|
+| **Tracked** | 🟢 Green | The goal fired and Optimizely sent a beacon to its servers. This counts as a real conversion in your experiment results. |
+| **Evaluated** | 🟡 Amber | The click matched the goal's selector and the goal wiring is confirmed correct — but Optimizely did **not** send a beacon. This happens in QA or force-variation mode (e.g. `?optimizely_x=...` in the URL). |
+
+### Why does Evaluated happen?
+
+When you QA an experiment using a force-variation URL like:
+
+```
+https://yoursite.com/?optimizely_x=5530678826106880
+```
+
+Optimizely forces you into a variation so you can check the visual changes, but it **deliberately disables tracking** so your test clicks do not pollute real experiment data. The goal fires and the selector is matched — but no conversion is sent to Optimizely's servers.
+
+The extension shows these goals as **Evaluated** so you can confirm the goal is wired up correctly, even though it does not count in results.
+
+### How to make goals count during QA
+
+Add `&optimizely_force_tracking=true` to your force-variation URL:
+
+```
+https://yoursite.com/?optimizely_x=5530678826106880&optimizely_force_tracking=true
+```
+
+This tells Optimizely to send real beacons even in force-variation mode. Goals will then appear as **Tracked** in the extension.
+
+> **Note:** The **Tracked / Evaluated** label only appears for Optimizely goals. Convert and VWO goals are always tracked — their hooks only fire when the platform actually records the conversion.
 
 ---
 
@@ -45,13 +81,10 @@ https://chromewebstore.google.com/detail/gaedkhpgghmbpmljcakcdhgmncjeignp?utm_so
 
 The easiest way — one click install, no setup needed.
 
-
-Go to the Chrome Web Store listing (link here once published)
-Click "Add to Chrome"
-Navigate to any page with a Convert, Optimizely, or VWO test running
+Go to the Chrome Web Store listing (link here once published)  
+Click "Add to Chrome"  
+Navigate to any page with a Convert, Optimizely, or VWO test running  
 Click the A/B TRACKER icon in your toolbar
-
-
 
 ---
 
@@ -131,7 +164,7 @@ injected.js                     content.js                  background.js       
 ## 📝 Known Limitations
 
 - **Convert goal names** may show as `Convert Goal {id}` if the project has **Data Anonymization** enabled in Convert settings — this is a platform setting, not an extension bug
-- **VWO goal names** are built from goal type (Click, Page View, Engagement etc.) since VWO does not expose goal names in the frontend JS
+- **VWO goal names** are built from goal type (Click, Page View, Engagement etc.) plus the CSS selector, since VWO does not expose human-readable goal names in the frontend JS. Hover over a VWO goal to see the full selector.
 - **Optimizely goal IDs** are numeric entity IDs from the event beacon
 - Goals that fired **before** the extension was loaded on the page will not appear
 
@@ -148,4 +181,4 @@ This extension:
 
 ---
 
-*Built by Sarthak Rautela · A/B Tesing TRACKER v2.2.0 · Manifest V3*
+*Built by Sarthak Rautela · A/B Testing TRACKER v2.3.0 · Manifest V3*

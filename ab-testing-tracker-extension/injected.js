@@ -15,8 +15,8 @@
   window.__abTrackerPageInjected = true;
 
   var experiments = {};
-  var goals = [];
-  var platforms = {};
+  var goals       = [];
+  var platforms   = {};
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -35,9 +35,9 @@
   //   2. convert.data.experiences[*].goals[*] — some versions nest goal info per exp
   function getConvertGoalName(gId) {
     try {
-      var sid = String(gId);
+      var sid  = String(gId);
       var data = window.convert && window.convert.data;
-      var cd = window.convert && window.convert.currentData;
+      var cd   = window.convert && window.convert.currentData;
 
       // 1. convert.data.goals — Array (modern) or Object (legacy)
       if (data) {
@@ -95,25 +95,41 @@
         if (n5) return String(n5);
       }
 
-    } catch (e) { }
+    } catch (e) {}
     return null;
   }
 
   var _goalKeys = new Set();
-  function recordGoal(platform, goalId, goalName) {
-    var gid = safeStr(goalId);
-    var tsBucket = Math.floor(Date.now() / 200);
-    var key = platform + '|' + gid + '|' + tsBucket;
+  // trackingStatus: 'tracked'   = beacon actually sent to Optimizely/Convert/VWO servers
+  //                 'evaluated' = goal selector matched / event evaluated, but NOT sent
+  //                               (e.g. force-variation QA mode, or VWO goal detected
+  //                               via cookie/hook before SDK decides to beacon)
+  // For Convert and VWO all detections are 'tracked' — their hooks only fire when
+  // the platform actually records the conversion. Only Optimizely has the
+  // 'evaluated' distinction because it evaluates clicks even when not bucketed.
+  function recordGoal(platform, goalId, goalName, trackingStatus, extra) {
+    var gid      = safeStr(goalId);
+    var status   = trackingStatus || 'tracked';
+    // FIX 3: Tightened from 200ms to 50ms so rapid-fire goals on the same
+    // platform within a 200ms window are no longer collapsed into one entry.
+    var tsBucket = Math.floor(Date.now() / 50);
+    var key      = platform + '|' + gid + '|' + tsBucket;
     if (_goalKeys.has(key)) return;
     _goalKeys.add(key);
 
-    goals.push({
-      platform: platform,
-      goalId: gid,
-      goalName: goalName || gid,
-      timestamp: new Date().toISOString(),
-      url: location.href
-    });
+    var entry = {
+      platform      : platform,
+      goalId        : gid,
+      goalName      : goalName || gid,
+      trackingStatus: status,
+      timestamp     : new Date().toISOString(),
+      url           : location.href
+    };
+    // Merge any extra fields (e.g. vwoSelector for VWO goals)
+    if (extra && typeof extra === 'object') {
+      Object.keys(extra).forEach(function (k) { entry[k] = extra[k]; });
+    }
+    goals.push(entry);
     if (goals.length > 100) goals.shift();
     postToContent();
   }
@@ -123,10 +139,10 @@
   function postToContent() {
     var payload = {
       experiments: Object.values(experiments),
-      goals: goals.slice(),
-      platforms: platforms,
-      url: location.href,
-      ts: Date.now()
+      goals      : goals.slice(),
+      platforms  : platforms,
+      url        : location.href,
+      ts         : Date.now()
     };
 
     // Write to window.__abTrackerData so DevTools panel can read via eval()
@@ -135,8 +151,8 @@
     // Also post to content script bridge via postMessage
     window.postMessage({
       __abTracker__: true,
-      type: 'AB_DATA',
-      payload: payload
+      type         : 'AB_DATA',
+      payload      : payload
     }, '*');
   }
 
@@ -212,8 +228,11 @@
       }
       // Optimizely event beacons
       if (/logx\.optimizely\.com|optimizely\.com\/events/.test(url)) {
+        // FIX 2: Body decoding and JSON.parse are each in their own try/catch.
+        // A malformed payload no longer aborts the rest of sniffRequest (e.g.
+        // the VWO check below), and a decode error doesn't kill the parse step.
+        var bodyStr = null;
         try {
-          var bodyStr = null;
           if (typeof body === 'string') {
             bodyStr = body;
           } else if (body && typeof body === 'object' && body.constructor && body.constructor.name === 'URLSearchParams') {
@@ -223,7 +242,9 @@
           } else if (ArrayBuffer.isView(body)) {
             bodyStr = new TextDecoder().decode(body.buffer);
           }
+        } catch (_) {}
 
+        try {
           var parsed = bodyStr ? JSON.parse(bodyStr) : null;
           if (parsed && parsed.visitors) {
             parsed.visitors.forEach(function (vis) {
@@ -231,23 +252,71 @@
                 (snap.events || []).forEach(function (ev) {
                   // ev.entity_id = numeric goal ID (e.g. "5047863646879744")
                   // ev.key       = api_name (e.g. "swo__addtocart_any_product")
-                  var evKey = ev.key || '';
+                  var evKey    = ev.key || '';
                   var entityId = ev.entity_id || evKey;
                   if (!evKey || evKey === 'campaign_activated') return;
                   var evName = getOptimizelyEventName(evKey) || evKey;
-                  recordGoal('Optimizely', safeStr(entityId), evName);
+                  recordGoal('Optimizely', safeStr(entityId), evName, 'tracked');
                 });
               });
             });
           }
-        } catch (_) { }
+        } catch (_) {}
       }
       // VWO goal beacons
-      if (/visualwebsiteoptimizer\.com|vwo\.com/.test(url) && /goal|conv/i.test(url)) {
-        var m2 = url.match(/(?:goal_id|goal)=(\w+)/);
-        recordGoal('VWO', m2 ? m2[1] : 'unknown', 'VWO Goal');
+      // FIX 1: Extended to parse the POST body (modern VWO SDKs send goal data
+      // in the body as JSON, not only in the URL). Also improved URL-based
+      // extraction with a more specific regex.
+      if (/visualwebsiteoptimizer\.com|vwo\.com/.test(url)) {
+        var vwoGoalFound = false;
+
+        // Try URL-based extraction first (legacy beacons)
+        if (/goal|conv/i.test(url)) {
+          var mvUrl = url.match(/(?:goal_id|goalId|goal)[=\/](\w+)/i);
+          if (mvUrl) {
+            var gNameUrl = getVWOGoalName('', mvUrl[1]) || ('VWO Goal ' + mvUrl[1]);
+            recordGoal('VWO', mvUrl[1], gNameUrl, 'tracked');
+            vwoGoalFound = true;
+          }
+        }
+
+        // Try body-based extraction (modern VWO SDK sends JSON body)
+        if (!vwoGoalFound && body) {
+          var vwoBodyStr = null;
+          try {
+            if (typeof body === 'string') {
+              vwoBodyStr = body;
+            } else if (body instanceof ArrayBuffer) {
+              vwoBodyStr = new TextDecoder().decode(body);
+            } else if (ArrayBuffer.isView(body)) {
+              vwoBodyStr = new TextDecoder().decode(body.buffer);
+            }
+          } catch (_) {}
+
+          if (vwoBodyStr) {
+            try {
+              var vwoParsed = JSON.parse(vwoBodyStr);
+              // Modern VWO event payload: { d: { event: { props: { vwo_event_type, id } } } }
+              var evType = vwoParsed && vwoParsed.d && vwoParsed.d.event &&
+                           vwoParsed.d.event.props && vwoParsed.d.event.props.vwo_event_type;
+              var evId   = vwoParsed && vwoParsed.d && vwoParsed.d.event &&
+                           vwoParsed.d.event.props && vwoParsed.d.event.props.id;
+              if (evType === 'goal' && evId) {
+                var gNameBody = getVWOGoalName('', safeStr(evId)) || ('VWO Goal ' + evId);
+                recordGoal('VWO', safeStr(evId), gNameBody, 'tracked');
+              }
+            } catch (_) {
+              // Not JSON — try a plain goal ID pattern in the raw string
+              var mvBody = vwoBodyStr.match(/["']?(?:goal_id|goalId|goal)["']?\s*[:=]\s*["']?(\w+)["']?/i);
+              if (mvBody) {
+                var gNameRaw = getVWOGoalName('', mvBody[1]) || ('VWO Goal ' + mvBody[1]);
+                recordGoal('VWO', mvBody[1], gNameRaw, 'tracked');
+              }
+            }
+          }
+        }
       }
-    } catch (e) { }
+    } catch (e) {}
   }
 
   // ════════════════════════════════════════════════════════════════════════════
@@ -270,12 +339,12 @@
                 // "Marking goal 100037426 triggered for experience 100051424"
                 var m = arg.match(/[Mm]arking goal\s+(\d+)\s+triggered(?:\s+for experience\s+(\d+))?/);
                 if (m) {
-                  var gId = m[1];
+                  var gId   = m[1];
                   var gName = getConvertGoalName(gId) || ('Convert Goal ' + gId);
                   recordGoal('Convert', gId, gName);
                 }
               }
-            } catch (e) { }
+            } catch (e) {}
             return orig.apply(console, arguments);
           };
         }
@@ -283,7 +352,7 @@
       hookConvertLog('log');
       hookConvertLog('info');
       hookConvertLog('debug');
-    } catch (e) { }
+    } catch (e) {}
 
     // Lifecycle listener: catches ALL goal types (click, visit, form, JS)
     // Per Convert docs, event object is:
@@ -296,13 +365,13 @@
       if (!window._conv_q.__abGoalListenerAdded) {
         window._conv_q.__abGoalListenerAdded = true;
         window._conv_q.push({
-          what: 'addListener',
+          what  : 'addListener',
           params: {
-            event: 'goal.triggered',
+            event  : 'goal.triggered',
             handler: function (event) {
               try {
                 // event.data is the primary structure per Convert docs
-                var d = event.data || event;
+                var d   = event.data || event;
                 var gId = d.goal_id || d['goal-id'] || d.goalId || event['goal-id'] || event.goal_id || 'unknown';
 
                 // Try to get goal name from config first
@@ -312,7 +381,7 @@
                 // build a descriptive label from what we DO have
                 if (!gName) {
                   var expName = d.experience_name || d.experienceName || '';
-                  var varName = d.variation_name || d.variationName || '';
+                  var varName = d.variation_name  || d.variationName  || '';
                   if (expName) {
                     // "Goal 100037426 (in: My Test Name)"
                     gName = 'Goal ' + gId + ' \u2014 ' + expName;
@@ -322,29 +391,58 @@
                 }
 
                 recordGoal('Convert', gId, gName);
-              } catch (e) { }
+              } catch (e) {}
             }
           }
         });
       }
-    } catch (e) { }
+    } catch (e) {}
 
     // Hook _conv_q.push for manual triggerConversion calls
-    try {
-      var q = window._conv_q;
-      if (q && !q.__abPushHooked) {
-        q.__abPushHooked = true;
-        var origPush = Array.prototype.push.bind(q);
-        q.push = function (cmd) {
+    // FIX 12: Convert sometimes reassigns window._conv_q to a new array after
+    // SDK init, silently losing the hook on the old reference. We now intercept
+    // window._conv_q via defineProperty so any reassignment is caught and
+    // re-hooked automatically.
+    // NOTE: var expression (not function declaration) — function declarations
+    // inside try blocks are a syntax error in strict mode.
+    var hookConvQ = function (q) {
+      if (!q || q.__abPushHooked) return;
+      q.__abPushHooked = true;
+      var origPush = Array.prototype.push.bind(q);
+      q.push = function (cmd) {
+        try {
           if (Array.isArray(cmd) && cmd[0] === 'triggerConversion') {
-            var gId = cmd[1];
+            var gId   = cmd[1];
             var gName = getConvertGoalName(gId) || ('Convert Goal ' + gId);
             recordGoal('Convert', gId, gName);
           }
-          return origPush(cmd);
-        };
+        } catch (e) {}
+        return origPush(cmd);
+      };
+    };
+
+    try {
+      hookConvQ(window._conv_q);
+
+      // Watch for reassignment of window._conv_q
+      if (!window.__abConvQWatched) {
+        window.__abConvQWatched = true;
+        var _convQVal = window._conv_q;
+        try {
+          Object.defineProperty(window, '_conv_q', {
+            configurable: true,
+            enumerable  : true,
+            get: function () { return _convQVal; },
+            set: function (val) {
+              _convQVal = val;
+              hookConvQ(val);
+            }
+          });
+        } catch (e) {
+          // defineProperty not available — nothing more we can do
+        }
       }
-    } catch (e) { }
+    } catch (e) {}
   }
 
   // ─── Convert experiment name lookup ─────────────────────────────────────────
@@ -376,7 +474,7 @@
       if (dex && dex[sid]) {
         return dex[sid].name || dex[sid].test_name || dex[sid].n || null;
       }
-    } catch (e) { }
+    } catch (e) {}
     return null;
   }
 
@@ -385,32 +483,32 @@
 
     // Method 1 — window.convert.currentData.experiences (modern snippet)
     try {
-      var cd = window.convert && window.convert.currentData;
+      var cd   = window.convert && window.convert.currentData;
       var exps = cd && cd.experiences;
       if (exps && typeof exps === 'object') {
         Object.keys(exps).forEach(function (expId) {
-          var exp = exps[expId];
+          var exp  = exps[expId];
           if (!exp) return;
           var vObj = (exp.variation && typeof exp.variation === 'object') ? exp.variation : {};
 
           var varName = vObj.name
-            || (vObj.id ? ('Variation ' + vObj.id) : null)
+            || (vObj.id  ? ('Variation ' + vObj.id)  : null)
             || (vObj.key ? ('Variation ' + vObj.key) : null)
             || 'Control / Original';
 
           experiments['c_' + expId] = {
-            platform: 'Convert',
-            id: expId,
-            name: getConvertExpName(expId) || exp.name || exp.experiment_name || ('Convert Exp ' + expId),
-            variant: varName,
+            platform : 'Convert',
+            id       : expId,
+            name     : getConvertExpName(expId) || exp.name || exp.experiment_name || ('Convert Exp ' + expId),
+            variant  : varName,
             variantId: safeStr(vObj.id || vObj.key || ''),
             firstTime: !!exp.firstTime,
-            status: 'active'
+            status   : 'active'
           };
           found = true;
         });
       }
-    } catch (e) { }
+    } catch (e) {}
 
     // Method 2 — window._conv_r (legacy)
     try {
@@ -418,21 +516,21 @@
       if (r && typeof r === 'object') {
         Object.keys(r).forEach(function (expId) {
           if (experiments['c_' + expId]) return;
-          var exp = r[expId];
+          var exp     = r[expId];
           var varName = exp && (exp.variation_name || exp.variationName);
           if (!varName) return;
           experiments['c_' + expId] = {
-            platform: 'Convert',
-            id: expId,
-            name: exp.exp_name || exp.name || ('Convert Exp ' + expId),
-            variant: varName,
+            platform : 'Convert',
+            id       : expId,
+            name     : exp.exp_name || exp.name || ('Convert Exp ' + expId),
+            variant  : varName,
             variantId: safeStr(exp.variation_id || exp.variationId || ''),
-            status: 'active'
+            status   : 'active'
           };
           found = true;
         });
       }
-    } catch (e) { }
+    } catch (e) {}
 
     // Method 3 — _conv_v cookie
     try {
@@ -440,7 +538,7 @@
         var eq = c.indexOf('=');
         if (eq === -1) return;
         var cName = c.substring(0, eq).trim();
-        var cVal = c.substring(eq + 1).trim();
+        var cVal  = c.substring(eq + 1).trim();
         if (!cName.startsWith('_conv_v')) return;
         var decoded = decodeURIComponent(cVal);
         var re = /v\.(\d+)\.(\d+)/g, m;
@@ -448,17 +546,17 @@
           var expId = m[1], varId = m[2];
           if (experiments['c_' + expId]) return;
           experiments['c_' + expId] = {
-            platform: 'Convert',
-            id: expId,
-            name: getConvertExpName(expId) || ('Convert Exp ' + expId),
-            variant: varId === '0' ? 'Control' : ('Variation ' + varId),
+            platform : 'Convert',
+            id       : expId,
+            name     : getConvertExpName(expId) || ('Convert Exp ' + expId),
+            variant  : varId === '0' ? 'Control' : ('Variation ' + varId),
             variantId: varId,
-            status: 'active'
+            status   : 'active'
           };
           found = true;
         }
       });
-    } catch (e) { }
+    } catch (e) {}
 
     // Method 4 — window.convert.data.experiments (older snippet)
     try {
@@ -469,17 +567,17 @@
           var exp = d.experiments[expId];
           if (!exp) return;
           experiments['c_' + expId] = {
-            platform: 'Convert',
-            id: expId,
-            name: exp.name || ('Convert Exp ' + expId),
-            variant: exp.variation_name || exp.variationName || 'Unknown',
+            platform : 'Convert',
+            id       : expId,
+            name     : exp.name || ('Convert Exp ' + expId),
+            variant  : exp.variation_name || exp.variationName || 'Unknown',
             variantId: safeStr(exp.variation_id || exp.variationId || ''),
-            status: 'active'
+            status   : 'active'
           };
           found = true;
         });
       }
-    } catch (e) { }
+    } catch (e) {}
 
     if (found) platforms.convert = true;
   }
@@ -521,7 +619,7 @@
           }
         }
       }
-    } catch (e) { }
+    } catch (e) {}
     return null;
   }
 
@@ -545,7 +643,7 @@
           if (events[j] && events[j].key === eventKey) return String(events[j].id);
         }
       }
-    } catch (e) { }
+    } catch (e) {}
     return null;
   }
 
@@ -572,7 +670,7 @@
     try {
       if (!optly || typeof optly.get !== 'function') return;
       var state = optly.get('state');
-      var data = optly.get('data');
+      var data  = optly.get('data');
       if (!state || !data) return;
 
       // Build a map of event key → event metadata
@@ -585,39 +683,43 @@
         if (ev && ev.key) eventMeta[ev.key] = ev;
       });
 
-      // For each active campaign, find its associated page/view events
+      // For each active campaign, find its associated conversion events
       var campaigns = (typeof state.getCampaignStates === 'function')
         ? state.getCampaignStates({ isActive: true })
         : {};
 
       Object.keys(campaigns || {}).forEach(function (campId) {
         var cs = campaigns[campId];
-        // Each active campaign implicitly fired a "campaign_activated" event.
-        // Look for view/page-type events tied to this campaign's page object.
         var pageId = cs.pageId || (cs.page && cs.page.id);
         if (!pageId) return;
 
-        // Find events whose API name contains the pageId or is a view type
         Object.keys(eventMeta).forEach(function (evKey) {
           var ev = eventMeta[evKey];
-          // Skip campaign_activated — that's bucketing, not a conversion goal
+          // Skip bucketing events — not a conversion goal
           if (evKey === 'campaign_activated') return;
-          // Only recover events that match this campaign's page
+          // Only recover events tied to this campaign's page
           if (String(ev.pageId || '') !== String(pageId) &&
-            String(ev.page_id || '') !== String(pageId)) return;
+              String(ev.page_id || '') !== String(pageId)) return;
 
-          var evName = getOptimizelyEventName(evKey) || ev.name || evKey;
+          // FIX 7: Skip pure view/page-activation events — these are targeting
+          // signals, not conversion goals. Only recover events whose category
+          // is explicitly "Conversion" or that carry a custom event type.
+          // Optimizely event categories: "View Activation", "Click", "Custom",
+          // "Engagement", "Revenue" etc. We skip "View Activation" events here
+          // because they fire on every page load for targeting purposes.
+          var evCategory = ev.category || ev.type || '';
+          if (/view.activation|pageview|page_view/i.test(evCategory)) return;
+
+          var evName   = getOptimizelyEventName(evKey) || ev.name || evKey;
           var entityId = safeStr(ev.id || evKey);
-          // Use a special "recovered" flag in the dedup key so it doesn't
-          // collide with real-time events that fire later
-          var tsBucket = Math.floor(Date.now() / 200);
+          var tsBucket = Math.floor(Date.now() / 50);
           var key = 'Optimizely|' + entityId + '|' + tsBucket;
           if (!_goalKeys.has(key)) {
-            recordGoal('Optimizely', entityId, evName);
+            recordGoal('Optimizely', entityId, evName, 'evaluated');
           }
         });
       });
-    } catch (e) { }
+    } catch (e) {}
   }
 
   // ─── window.optimizely getter trap ───────────────────────────────────────────
@@ -633,7 +735,7 @@
     try {
       Object.defineProperty(window, 'optimizely', {
         configurable: true,
-        enumerable: true,
+        enumerable  : true,
         get: function () { return _optlyValue; },
         set: function (val) {
           _optlyValue = val;
@@ -644,7 +746,7 @@
               Object.defineProperty(window, 'optimizely', {
                 configurable: true, enumerable: true, writable: true, value: val
               });
-            } catch (e) { }
+            } catch (e) {}
             // Hook immediately so we catch goals that fire right after SDK init
             installOptimizelyListeners();
             detectOptimizely();
@@ -672,9 +774,9 @@
   function extractOptimizelyGoal(evData) {
     if (!evData) return null;
     // Internal decision log format: apiName is the key, name is display name
-    var evKey = evData.apiName || evData.eventName || evData.eventKey || evData.key || '';
-    var evName = evData.name || evData.eventName || evData.apiName || evKey;
-    var entityId = evData.id || evData.entityId || evData.entity_id || evKey;
+    var evKey    = evData.apiName || evData.eventName || evData.eventKey || evData.key || '';
+    var evName   = evData.name    || evData.eventName || evData.apiName  || evKey;
+    var entityId = evData.id      || evData.entityId  || evData.entity_id || evKey;
     if (!evKey || evKey === 'campaign_activated' || evKey === 'view_activated') return null;
     var resolved = getOptimizelyEventName(evKey) || evName || evKey;
     return { key: evKey, name: resolved, id: safeStr(entityId) };
@@ -689,66 +791,104 @@
       if (!optly.__abCampaignListenerAdded) {
         optly.__abCampaignListenerAdded = true;
         optly.push({
-          type: 'addListener',
+          type  : 'addListener',
           filter: { type: 'lifecycle', name: 'campaignDecided' },
           handler: function (event) {
             try {
-              var data = event.data || {};
+              var data   = event.data || {};
               var expObj = data.experiment || {};
-              var varObj = data.variation || {};
-              var camp = data.campaign || {};
+              var varObj = data.variation  || {};
+              var camp   = data.campaign   || {};
               if (!expObj.id) return;
               experiments['o_' + expObj.id] = {
-                platform: 'Optimizely',
-                id: safeStr(expObj.id),
-                name: expObj.name || camp.name || ('Optimizely Exp ' + expObj.id),
-                variant: varObj.name || safeStr(varObj.id) || 'Unknown',
+                platform : 'Optimizely',
+                id       : safeStr(expObj.id),
+                name     : expObj.name || camp.name || ('Optimizely Exp ' + expObj.id),
+                variant  : varObj.name || safeStr(varObj.id) || 'Unknown',
                 variantId: safeStr(varObj.id || ''),
-                status: 'active'
+                status   : 'active'
               };
               platforms.optimizely = true;
               postToContent();
-            } catch (e) { }
+            } catch (e) {}
           }
         });
       }
 
-      // ── 2. analytics trackEvent — only fires when Optimizely DOES track ────────
+      // ── 2. analytics trackEvent — fires when Optimizely DOES send a beacon ────
       if (!optly.__abTrackListenerAdded) {
         optly.__abTrackListenerAdded = true;
         optly.push({
-          type: 'addListener',
+          type  : 'addListener',
           filter: { type: 'analytics', name: 'trackEvent' },
           handler: function (event) {
             try {
               var g = extractOptimizelyGoal(event.data || {});
-              if (g) recordGoal('Optimizely', g.id, g.name);
-            } catch (e) { }
+              if (g) recordGoal('Optimizely', g.id, g.name, 'tracked');
+            } catch (e) {}
+          }
+        });
+      }
+
+      // ── 2b. decision lifecycle — fires for ALL evaluated click/custom events ────
+      // This is the KEY listener for catching "Not tracking click event" goals.
+      // When a visitor is in preview mode or the experiment is in QA, Optimizely
+      // evaluates the click (logs "Not tracking click event" to console) but does
+      // NOT send a network beacon — so the analytics trackEvent listener above
+      // never fires. The 'decision' lifecycle fires for EVERY evaluated event
+      // regardless of whether it was actually tracked or not.
+      // This is what makes the extension show goals even in preview/QA mode,
+      // matching what &optimizely_log=info shows in the console.
+      if (!optly.__abDecisionListenerAdded) {
+        optly.__abDecisionListenerAdded = true;
+        optly.push({
+          type  : 'addListener',
+          filter: { type: 'lifecycle', name: 'decision' },
+          handler: function (event) {
+            try {
+              var d = event.data || {};
+              // decision event structure:
+              // { decisionType, experimentId, variationId, enabled,
+              //   ruleKey, flagKey, ... }
+              // We only care about click/custom event decisions, not
+              // experiment activation decisions (those are campaignDecided)
+              if (d.decisionType === 'flag' || d.decisionType === 'experiment') return;
+
+              var evKey  = d.eventKey || d.apiName || d.ruleKey || '';
+              var evName = d.eventName || d.name || evKey;
+              if (!evKey || evKey === 'campaign_activated' || evKey === 'view_activated') return;
+              var resolved  = getOptimizelyEventName(evKey) || evName || evKey;
+              var entityId  = safeStr(d.id || d.entityId || evKey);
+              recordGoal('Optimizely', entityId, resolved, 'evaluated');
+            } catch (e) {}
           }
         });
       }
 
       // ── 3. page lifecycle — fires for every page/view activation ───────────────
-      // This is what produces "Optly / Not tracking click event" in the console.
-      // The 'page' lifecycle includes 'activated', 'viewed', and decision events
-      // with the full event object including name + apiName.
       if (!optly.__abPageListenerAdded) {
         optly.__abPageListenerAdded = true;
         optly.push({
-          type: 'addListener',
+          type  : 'addListener',
           filter: { type: 'lifecycle', name: 'pageActivated' },
           handler: function (event) {
             try {
               var page = (event.data || {}).page || {};
-              // A page activation means a visit/page-view goal fired for this page
-              var evKey = page.apiName || page.key || '';
-              var evName = page.name || evKey;
-              var evId = safeStr(page.id || evKey);
-              if (evKey && evKey !== 'campaign_activated') {
-                var resolved = getOptimizelyEventName(evKey) || evName || evKey;
-                recordGoal('Optimizely', evId, resolved);
-              }
-            } catch (e) { }
+              var evKey  = page.apiName || page.key || '';
+              var evName = page.name    || evKey;
+              var evId   = safeStr(page.id || evKey);
+              if (!evKey || evKey === 'campaign_activated') return;
+
+              // FIX 6: pageActivated fires for EVERY page Optimizely evaluates,
+              // including pure targeting pages that are not conversion goals.
+              // Use a blocklist (not allowlist) so untagged pages — common in many
+              // Optimizely setups — are still recorded rather than silently dropped.
+              // Only skip if Optimizely explicitly marks the page as non-conversion.
+              if (page.isConversionPage === false) return;
+
+              var resolved = getOptimizelyEventName(evKey) || evName || evKey;
+              recordGoal('Optimizely', evId, resolved, 'evaluated');
+            } catch (e) {}
           }
         });
       }
@@ -762,7 +902,7 @@
             if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
               if (payload.type === 'event') {
                 var g = extractOptimizelyGoal(payload);
-                if (g) recordGoal('Optimizely', g.id, g.name);
+                if (g) recordGoal('Optimizely', g.id, g.name, 'tracked');
               }
             }
             if (Array.isArray(payload) && payload[0] === 'trackEvent') {
@@ -770,10 +910,10 @@
               if (evKey2 && evKey2 !== 'campaign_activated') {
                 var resolved2 = getOptimizelyEventName(evKey2) || evKey2;
                 var entityId2 = getOptimizelyEventId(evKey2) || evKey2;
-                recordGoal('Optimizely', safeStr(entityId2), resolved2);
+                recordGoal('Optimizely', safeStr(entityId2), resolved2, 'tracked');
               }
             }
-          } catch (e) { }
+          } catch (e) {}
           return origPush(payload);
         };
       }
@@ -800,75 +940,132 @@
                 // carry the event object as `data` — same format as console log
                 if (data && typeof data === 'object' && data.apiName) {
                   var g = extractOptimizelyGoal(data);
-                  if (g) recordGoal('Optimizely', g.id, g.name);
+                  if (g) recordGoal('Optimizely', g.id, g.name, 'tracked');
                 }
                 // Also handle array of events
                 if (Array.isArray(data)) {
                   data.forEach(function (item) {
                     if (item && item.apiName) {
                       var g2 = extractOptimizelyGoal(item);
-                      if (g2) recordGoal('Optimizely', g2.id, g2.name);
+                      if (g2) recordGoal('Optimizely', g2.id, g2.name, 'tracked');
                     }
                   });
                 }
-              } catch (e) { }
+              } catch (e) {}
               return origLog(level, msg, data);
             };
           }
-        } catch (e) { }
+        } catch (e) {}
 
         // Also try window.optimizelyLogger (some versions expose it globally)
         try {
           if (window.optimizelyLogger && typeof window.optimizelyLogger.log === 'function'
-            && !window.optimizelyLogger.__abHooked) {
+              && !window.optimizelyLogger.__abHooked) {
             window.optimizelyLogger.__abHooked = true;
             var origGLog = window.optimizelyLogger.log.bind(window.optimizelyLogger);
             window.optimizelyLogger.log = function (level, msg, data) {
               try {
                 if (data && typeof data === 'object' && data.apiName) {
                   var g = extractOptimizelyGoal(data);
-                  if (g) recordGoal('Optimizely', g.id, g.name);
+                  if (g) recordGoal('Optimizely', g.id, g.name, 'tracked');
                 }
-              } catch (e) { }
+              } catch (e) {}
               return origGLog(level, msg, data);
             };
           }
-        } catch (e) { }
+        } catch (e) {}
+      }
+
+      // ── 7. Own click listener — catches goals even when Optimizely says "Not tracking" ──
+      // When a visitor is in preview/QA mode or not bucketed into the live experiment,
+      // Optimizely evaluates the click but sends NO beacon and fires NO SDK listener.
+      // The only public signal is the console log — but ONLY when &optimizely_log=info
+      // is active. Without it, there is complete silence.
+      //
+      // Solution: read Optimizely's own event config from optimizely.get('data').events
+      // which contains every configured click goal's selector (eventFilter.selector).
+      // We attach ONE document-level capture listener and match clicks against those
+      // selectors ourselves. When a match is found, we record the goal directly.
+      // This is clean — no console pollution, no URL param needed, works in all modes.
+      if (!window.__abOptlyClickListenerAdded) {
+        window.__abOptlyClickListenerAdded = true;
+        document.addEventListener('click', function (e) {
+          try {
+            var optly2 = window.optimizely;
+            if (!optly2 || typeof optly2.get !== 'function') return;
+            var data2 = optly2.get('data');
+            if (!data2) return;
+            var evts = data2.events;
+            if (!evts) return;
+
+            var evArr2 = Array.isArray(evts) ? evts : Object.values(evts);
+            evArr2.forEach(function (ev) {
+              if (!ev) return;
+              // Only process click-type events
+              var evType = ev.eventType || ev.type || ev.category || '';
+              if (!/click/i.test(evType) && ev.eventType !== 'click') {
+                // Also check eventFilter if present
+                var ef = ev.eventFilter || {};
+                if (ef.filterType !== 'target_selector' && !/click/i.test(ef.filterType || '')) return;
+              }
+
+              // Get the selector Optimizely uses for this click goal
+              var ef2     = ev.eventFilter || {};
+              var selector = ef2.selector || ef2.target_selector || '';
+              if (!selector) return;
+
+              // Check if the clicked element (or any ancestor) matches the selector
+              var target = e.target;
+              var matched = false;
+              try {
+                matched = target.matches(selector) ||
+                          !!(target.closest && target.closest(selector));
+              } catch (_) { return; }
+
+              if (!matched) return;
+
+              // Record the goal — same name/id lookup as the SDK listener path
+              var evKey3   = ev.key || ev.apiName || '';
+              var evName3  = getOptimizelyEventName(evKey3) || ev.name || evKey3;
+              var entityId3 = safeStr(ev.id || evKey3);
+              if (!evKey3 || evKey3 === 'campaign_activated') return;
+              recordGoal('Optimizely', entityId3, evName3, 'evaluated');
+            });
+          } catch (e2) {}
+        }, true); // capture phase — same as Optimizely's own listener
       }
 
       // ── 6. Hook console.log to intercept "Optly / Not tracking click event" ────
-      // This is the exact same mechanism as &optimizely_log=info — Optimizely
-      // calls console.log with the event object as a second argument.
-      // Format: console.log("Optly / Not tracking click event:", eventObj)
-      //      or console.log("Optly / Tracking click event:", eventObj)
-      if (!window.__abOptlyConsoleHooked) {
-        window.__abOptlyConsoleHooked = true;
+      if (!console.__abOptlyConsoleHooked) {
+        // FIX 8: Guard is now on the console object itself (not window.__abOptlyConsoleHooked).
+        // If console is ever reassigned between the retry timeouts, window.__abOptlyConsoleHooked
+        // would still be true and the new console object would never be hooked.
+        // Per-object guard ensures we only hook each console instance once.
+        console.__abOptlyConsoleHooked = true;
         var origConsoleLog = console.log.bind(console);
         console.log = function () {
           try {
             var msg = arguments[0];
             if (typeof msg === 'string' && /Optly\s*\//.test(msg)) {
-              // Iterate all arguments — the event object(s) come after the message
               for (var i = 1; i < arguments.length; i++) {
                 var arg = arguments[i];
-                // Could be a single event object or an array of them
                 if (arg && typeof arg === 'object') {
                   var items = Array.isArray(arg) ? arg : [arg];
                   items.forEach(function (item) {
                     if (item && (item.apiName || item.name)) {
                       var g = extractOptimizelyGoal(item);
-                      if (g) recordGoal('Optimizely', g.id, g.name);
+                      if (g) recordGoal('Optimizely', g.id, g.name, 'tracked');
                     }
                   });
                 }
               }
             }
-          } catch (e) { }
+          } catch (e) {}
           return origConsoleLog.apply(console, arguments);
         };
       }
 
-    } catch (e) { }
+    } catch (e) {}
   }
 
   function detectOptimizely() {
@@ -885,17 +1082,17 @@
           if (typeof st.getCampaignStates === 'function') {
             var campaigns = st.getCampaignStates({ isActive: true });
             Object.keys(campaigns || {}).forEach(function (campId) {
-              var cs = campaigns[campId];
+              var cs    = campaigns[campId];
               var expObj = cs.experiment || {};
-              var varObj = cs.variation || {};
+              var varObj = cs.variation  || {};
               if (!expObj.id) return;
               experiments['o_' + expObj.id] = {
-                platform: 'Optimizely',
-                id: safeStr(expObj.id),
-                name: expObj.name || cs.campaignName || ('Optimizely Exp ' + expObj.id),
-                variant: varObj.name || safeStr(varObj.id) || 'Unknown',
+                platform : 'Optimizely',
+                id       : safeStr(expObj.id),
+                name     : expObj.name || cs.campaignName || ('Optimizely Exp ' + expObj.id),
+                variant  : varObj.name || safeStr(varObj.id) || 'Unknown',
                 variantId: safeStr(varObj.id || ''),
-                status: cs.isActive ? 'active' : 'inactive'
+                status   : cs.isActive ? 'active' : 'inactive'
               };
             });
           }
@@ -910,12 +1107,12 @@
               if (!es) return;
               var v = es.variation || {};
               experiments['o_' + expId] = {
-                platform: 'Optimizely',
-                id: safeStr(expId),
-                name: es.experimentName || ('Optimizely Exp ' + expId),
-                variant: v.name || safeStr(v.id) || 'Unknown',
+                platform : 'Optimizely',
+                id       : safeStr(expId),
+                name     : es.experimentName || ('Optimizely Exp ' + expId),
+                variant  : v.name || safeStr(v.id) || 'Unknown',
                 variantId: safeStr(v.id || ''),
-                status: es.isActive ? 'active' : 'inactive'
+                status   : es.isActive ? 'active' : 'inactive'
               };
             });
           }
@@ -924,23 +1121,23 @@
 
       // Classic SDK
       if (optly.data) {
-        var exps2 = optly.data.experiments || {};
-        var varMap = (optly.data.state && optly.data.state.variationNamesMap) || {};
+        var exps2   = optly.data.experiments || {};
+        var varMap  = (optly.data.state && optly.data.state.variationNamesMap) || {};
         var actives = (optly.data.state && optly.data.state.activeExperiments) || [];
         actives.forEach(function (expId) {
           if (experiments['o_' + expId]) return;
           var exp = exps2[expId] || {};
           experiments['o_' + expId] = {
-            platform: 'Optimizely',
-            id: safeStr(expId),
-            name: exp.name || ('Optimizely Exp ' + expId),
-            variant: varMap[expId] || 'Unknown',
+            platform : 'Optimizely',
+            id       : safeStr(expId),
+            name     : exp.name || ('Optimizely Exp ' + expId),
+            variant  : varMap[expId] || 'Unknown',
             variantId: '',
-            status: 'active'
+            status   : 'active'
           };
         });
       }
-    } catch (e) { }
+    } catch (e) {}
   }
 
   // ════════════════════════════════════════════════════════════════════════════
@@ -955,26 +1152,53 @@
         window.VWO.__abVariationListenerAdded = true;
         window.VWO.push(['onVariationApplied', function (data) {
           try {
-            var expId = safeStr(data[1]);
-            var varId = safeStr(data[2]);
-            if (!expId) return;
-            var exp = window._vwo_exp && window._vwo_exp[expId];
-            var vName = (exp && exp.comb_n && exp.comb_n[varId])
-              || (varId === '1' ? 'Control' : ('Variation ' + (parseInt(varId, 10) - 1)));
+            // FIX 11: Older VWO SDKs pass data as [campaignType, campaignKey, variationName]
+            // (strings), while newer SDKs pass numeric IDs. Guard both cases.
+            // data[0] = campaign type (e.g. "VISUAL_AB", "SURVEY")
+            // data[1] = campaign ID (numeric string in new SDK, key string in old)
+            // data[2] = combination/variation ID (numeric string) or variation name
+            var rawExpId = safeStr(data[1]);
+            var rawVarId = safeStr(data[2]);
+            if (!rawExpId) return;
+
+            var numericExpId = parseInt(rawExpId, 10);
+            // If data[1] is not a pure integer, it's a campaign key (old SDK) —
+            // look up the numeric ID from _vwo_exp by scanning for a matching key
+            var expId = rawExpId;
+            if (isNaN(numericExpId) && window._vwo_exp) {
+              Object.keys(window._vwo_exp).forEach(function (k) {
+                if (window._vwo_exp[k] && window._vwo_exp[k].k === rawExpId) {
+                  expId = k;
+                }
+              });
+            }
+
+            var exp   = window._vwo_exp && window._vwo_exp[expId];
+            var numericVarId = parseInt(rawVarId, 10);
+            var vName;
+            if (!isNaN(numericVarId)) {
+              // Numeric varId path (new SDK)
+              vName = (exp && exp.comb_n && exp.comb_n[rawVarId])
+                || (rawVarId === '1' ? 'Control' : ('Variation ' + (numericVarId - 1)));
+            } else {
+              // String variation name path (old SDK) — use it directly
+              vName = rawVarId || 'Unknown';
+            }
+
             experiments['v_' + expId] = {
-              platform: 'VWO',
-              id: expId,
-              name: (exp && exp.name) || ('VWO Exp ' + expId),
-              variant: vName,
-              variantId: varId,
-              status: 'active'
+              platform : 'VWO',
+              id       : expId,
+              name     : (exp && exp.name) || ('VWO Exp ' + expId),
+              variant  : vName,
+              variantId: rawVarId,
+              status   : 'active'
             };
             platforms.vwo = true;
             postToContent();
-          } catch (e) { }
+          } catch (e) {}
         }]);
       }
-    } catch (e) { }
+    } catch (e) {}
 
     // Hook classic goal functions
     try {
@@ -982,24 +1206,24 @@
         var orig1 = window._vis_opt_goal_conversion;
         window._vis_opt_goal_conversion = function (goalId) {
           var gName = getVWOGoalName('', goalId) || ('VWO Goal ' + goalId);
-          recordGoal('VWO', goalId, gName);
+          recordGoal('VWO', goalId, gName, 'tracked');
           return orig1.apply(this, arguments);
         };
         window._vis_opt_goal_conversion.__abHooked = true;
       }
-    } catch (e) { }
+    } catch (e) {}
 
     try {
       if (typeof window._vis_opt_register_conversion === 'function' && !window._vis_opt_register_conversion.__abHooked) {
         var orig2 = window._vis_opt_register_conversion;
         window._vis_opt_register_conversion = function (goalId, campaignId) {
           var gName = getVWOGoalName(campaignId || '', goalId) || ('VWO Goal ' + goalId);
-          recordGoal('VWO', goalId, gName);
+          recordGoal('VWO', goalId, gName, 'tracked');
           return orig2.apply(this, arguments);
         };
         window._vis_opt_register_conversion.__abHooked = true;
       }
-    } catch (e) { }
+    } catch (e) {}
 
     // Hook VWO.event (SmartCode / new SDK)
     try {
@@ -1007,12 +1231,12 @@
         var origEvt = window.VWO.event.bind(window.VWO);
         window.VWO.event = function (goalId) {
           var gName = getVWOGoalName('', goalId) || ('VWO Goal ' + goalId);
-          recordGoal('VWO', goalId, gName);
+          recordGoal('VWO', goalId, gName, 'tracked');
           return origEvt.apply(this, arguments);
         };
         window.VWO.event.__abHooked = true;
       }
-    } catch (e) { }
+    } catch (e) {}
 
     // Hook VWO queue push for ['track.goal', id]
     try {
@@ -1022,12 +1246,12 @@
         window.VWO.push = function (cmd) {
           if (Array.isArray(cmd) && cmd[0] === 'track.goal') {
             var gName = getVWOGoalName('', cmd[1]) || ('VWO Goal ' + cmd[1]);
-            recordGoal('VWO', cmd[1], gName);
+            recordGoal('VWO', cmd[1], gName, 'tracked');
           }
           return origVwoPush(cmd);
         };
       }
-    } catch (e) { }
+    } catch (e) {}
   }
 
   function detectVWO() {
@@ -1040,21 +1264,21 @@
           var exp = window._vwo_exp[expId];
           if (!exp || exp.status !== 'RUNNING') return;
           if (exp.combination_chosen === undefined || exp.combination_chosen === null) return;
-          var cId = safeStr(exp.combination_chosen);
+          var cId   = safeStr(exp.combination_chosen);
           var cName = (exp.comb_n && exp.comb_n[exp.combination_chosen])
             || (exp.combination_chosen === 1 ? 'Control' : ('Variation ' + (exp.combination_chosen - 1)));
           experiments['v_' + expId] = {
-            platform: 'VWO',
-            id: expId,
-            name: exp.name || ('VWO Exp ' + expId),
-            variant: cName,
+            platform : 'VWO',
+            id       : expId,
+            name     : exp.name || ('VWO Exp ' + expId),
+            variant  : cName,
             variantId: cId,
-            status: 'active'
+            status   : 'active'
           };
           found = true;
         });
       }
-    } catch (e) { }
+    } catch (e) {}
 
     // Method 2 — _vis_opt_exp_{id}_combi cookies
     try {
@@ -1062,26 +1286,26 @@
         var eq = c.indexOf('=');
         if (eq === -1) return;
         var cName = c.substring(0, eq).trim();
-        var cVal = c.substring(eq + 1).trim();
-        var m = cName.match(/^_vis_opt_exp_(\d+)_combi$/);
+        var cVal  = c.substring(eq + 1).trim();
+        var m     = cName.match(/^_vis_opt_exp_(\d+)_combi$/);
         if (!m) return;
         var expId = m[1];
         if (experiments['v_' + expId]) return;
         var combi = parseInt(cVal, 10);
-        var exp = window._vwo_exp && window._vwo_exp[expId];
+        var exp   = window._vwo_exp && window._vwo_exp[expId];
         var vName = (exp && exp.comb_n && exp.comb_n[combi])
           || (combi === 1 ? 'Control' : ('Variation ' + (combi - 1)));
         experiments['v_' + expId] = {
-          platform: 'VWO',
-          id: expId,
-          name: (exp && exp.name) || ('VWO Exp ' + expId),
-          variant: vName,
+          platform : 'VWO',
+          id       : expId,
+          name     : (exp && exp.name) || ('VWO Exp ' + expId),
+          variant  : vName,
           variantId: safeStr(combi),
-          status: 'active'
+          status   : 'active'
         };
         found = true;
       });
-    } catch (e) { }
+    } catch (e) {}
 
     if (found) {
       platforms.vwo = true;
@@ -1136,7 +1360,7 @@
   // VWO stores NO goal names — only identifier (event type) and url (selector).
   // We build a readable name: e.g. "Click: renew", "Page View", "Bounce".
   function getVWOGoalName(expId, goalId) {
-    var sid = String(goalId);
+    var sid     = String(goalId);
     var goalObj = null;
 
     try {
@@ -1159,8 +1383,8 @@
       // 3. VWO._.allSettings.dataStore.campaigns
       if (!goalObj) {
         var camps = window.VWO && window.VWO._ && window.VWO._.allSettings &&
-          window.VWO._.allSettings.dataStore &&
-          window.VWO._.allSettings.dataStore.campaigns;
+                    window.VWO._.allSettings.dataStore &&
+                    window.VWO._.allSettings.dataStore.campaigns;
         if (camps) {
           var cKeys = Object.keys(camps);
           for (var j = 0; j < cKeys.length; j++) {
@@ -1169,44 +1393,63 @@
           }
         }
       }
-    } catch (e) { }
+    } catch (e) {}
 
     if (!goalObj) return null;
 
     try {
       var identifier = goalObj.identifier || '';
-      var url = goalObj.url || '';
+      var url        = goalObj.url || '';
 
       var identifierMap = {
-        'vwo_pageView': 'Page View',
-        'vwo_engagement': 'Engagement',
-        'vwo_bounce': 'Bounce',
-        'vwo_dom_click': 'Click',
-        'vwo_dom_submit': 'Form Submit',
-        'vwo_dom_hover': 'Hover',
-        'vwo_revenue': 'Revenue',
+        'vwo_pageView'        : 'Page View',
+        'vwo_engagement'      : 'Engagement',
+        'vwo_bounce'          : 'Bounce',
+        'vwo_dom_click'       : 'Click',
+        'vwo_dom_submit'      : 'Form Submit',
+        'vwo_dom_hover'       : 'Hover',
+        'vwo_revenue'         : 'Revenue',
         'vwo_customConversion': 'Custom Conversion'
       };
 
       var baseName = identifierMap[identifier] || identifier || 'Goal';
 
-      // For interaction goals, append a short readable selector
+      // For interaction goals, append the selector.
+      // We store the FULL selector in the goal object (as vwoSelector) so the
+      // UI can show a truncated version in the row but the full selector on hover.
+      // The name itself gets a readable short version — last meaningful class/id
+      // segment — so the goal list stays scannable.
       if (url && (identifier === 'vwo_dom_click' || identifier === 'vwo_dom_submit' || identifier === 'vwo_dom_hover')) {
-        var shortSel = url.split(',')[0].trim()
-          .replace(/\[href[^\]]*\]/g, function (m) {
-            var hm = m.match(/href[*^$]?=["']([^"']+)/);
-            if (hm) {
-              var parts = hm[1].replace(/\/$/, '').split('/');
-              return '[' + parts[parts.length - 1] + ']';
-            }
-            return '';
-          });
-        if (shortSel.length > 45) shortSel = shortSel.substring(0, 45) + '…';
-        if (shortSel) baseName = baseName + ': ' + shortSel;
+        var firstSel = url.split(',')[0].trim();
+
+        // Simplify href attributes to just the last path segment
+        var cleanedSel = firstSel.replace(/\[href[^\]]*\]/g, function (m) {
+          var hm = m.match(/href[*^$]?=["']([^"']+)/);
+          if (hm) {
+            var parts = hm[1].replace(/\/$/, '').split('/');
+            return '[' + parts[parts.length - 1] + ']';
+          }
+          return '';
+        });
+
+        // Store full cleaned selector for tooltip use (returned alongside name)
+        goalObj.__abFullSelector = cleanedSel;
+
+        // For the display name: take up to 50 chars, break at a class/id boundary
+        var displaySel = cleanedSel;
+        if (displaySel.length > 50) {
+          // Try to break at a word boundary (., #, [, space)
+          var cutAt = displaySel.lastIndexOf('.', 50);
+          if (cutAt < 20) cutAt = displaySel.lastIndexOf('#', 50);
+          if (cutAt < 20) cutAt = displaySel.lastIndexOf('[', 50);
+          if (cutAt < 20) cutAt = 50;
+          displaySel = displaySel.substring(0, cutAt) + '…';
+        }
+        if (displaySel) baseName = baseName + ': ' + displaySel;
       }
 
       return baseName;
-    } catch (e) { }
+    } catch (e) {}
 
     return null;
   }
@@ -1232,15 +1475,19 @@
         if (_seenVwoGoalCookies.has(cName)) return;
         _seenVwoGoalCookies.add(cName);
 
-        var expId = m[1];
+        var expId  = m[1];
         var goalId = m[2];
-        var gName = getVWOGoalName(expId, goalId) || ('VWO Goal ' + goalId);
+        var gName  = getVWOGoalName(expId, goalId) || ('VWO Goal ' + goalId);
+        // getVWOGoalName stores the full selector on goalObj.__abFullSelector
+        var vwoGoalObj2 = (window._vwo_exp && window._vwo_exp[expId] &&
+                           window._vwo_exp[expId].goals && window._vwo_exp[expId].goals[goalId]);
+        var vwoSel2 = (vwoGoalObj2 && vwoGoalObj2.__abFullSelector) || (vwoGoalObj2 && vwoGoalObj2.url) || '';
 
-        recordGoal('VWO', goalId, gName);
+        recordGoal('VWO', goalId, gName, 'tracked', vwoSel2 ? { vwoSelector: vwoSel2 } : null);
         changed = true;
       });
       if (changed) postToContent();
-    } catch (e) { }
+    } catch (e) {}
   }
 
   // Seed the seen-set with any goal cookies already present on page load
@@ -1255,7 +1502,7 @@
           _seenVwoGoalCookies.add(cName);
         }
       });
-    } catch (e) { }
+    } catch (e) {}
   }
 
   seedVWOGoalCookies();
@@ -1267,7 +1514,10 @@
     if (location.href === lastHref) return;
     lastHref = location.href;
     Object.keys(experiments).forEach(function (k) { delete experiments[k]; });
-    Object.keys(platforms).forEach(function (k) { delete platforms[k]; });
+    Object.keys(platforms).forEach(function (k)   { delete platforms[k];   });
+    // Goals are intentionally NOT cleared on SPA navigation —
+    // cross-page goal tracking is useful (goals from page A are still
+    // visible after navigating to page B within the same session).
     // On SPA nav, clear seen goal cookies so new-page goals are picked up fresh
     _seenVwoGoalCookies.clear();
     seedVWOGoalCookies();

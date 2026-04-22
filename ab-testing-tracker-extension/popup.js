@@ -116,6 +116,16 @@ function renderPlatforms(plats) {
     var el = document.getElementById(id);
     el.className = cls;
   }
+
+  // Show Optimizely Tracked/Evaluated legend only when Optimizely is detected
+  var legend = document.getElementById('optlyLegend');
+  if (legend) {
+    if (plats.optimizely) {
+      legend.classList.add('visible');
+    } else {
+      legend.classList.remove('visible');
+    }
+  }
 }
 
 // ── Experiments ──────────────────────────────────────────────────
@@ -164,13 +174,26 @@ function renderGoals() {
   var sorted = localGoals.slice().reverse();
   list.innerHTML = sorted.map(function (g) {
     var p = g.platform.toLowerCase();
+    var statusBadge = '';
+    if (g.platform === 'Optimizely') {
+      if (g.trackingStatus === 'evaluated') {
+        statusBadge = '<span class="gstatus gstatus-eval" title="Click detected, goal selector matched — but NOT sent to Optimizely (QA/force-variation mode)">Evaluated</span>';
+      } else {
+        statusBadge = '<span class="gstatus gstatus-tracked" title="Beacon sent to Optimizely servers — counts as a real conversion">Tracked</span>';
+      }
+    }
+    var goalTitle2 = '';
+    if (g.platform === 'VWO' && g.vwoSelector) {
+      goalTitle2 = ' title="Full selector: ' + h(g.vwoSelector) + '"';
+    }
     return '<div class="gc">' +
       '<div class="gi"></div>' +
       '<div class="gb">' +
-        '<div class="gn">' + h(g.goalName || g.goalId) + '</div>' +
+        '<div class="gn"' + goalTitle2 + '>' + h(g.goalName || g.goalId) + '</div>' +
         '<div class="gm">' +
           '<span class="gplat gplat-' + p[0] + '">' + h(g.platform) + '</span>' +
           '<span class="gid">ID: ' + h(g.goalId) + '</span>' +
+          statusBadge +
           '<span class="gt">' + fmtTime(g.timestamp) + '</span>' +
         '</div>' +
       '</div>' +

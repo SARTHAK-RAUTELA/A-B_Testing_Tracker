@@ -85,6 +85,15 @@ function renderPlatforms(plats) {
   sc('pb-c', plats.convert    ? 'pb on-c' : 'pb off');
   sc('pb-o', plats.optimizely ? 'pb on-o' : 'pb off');
   sc('pb-v', plats.vwo        ? 'pb on-v' : 'pb off');
+  // Show Optimizely Tracked/Evaluated legend only when Optimizely is detected
+  var legend = document.getElementById('optlyLegend');
+  if (legend) {
+    if (plats.optimizely) {
+      legend.classList.add('visible');
+    } else {
+      legend.classList.remove('visible');
+    }
+  }
 }
 
 // ── Experiments ───────────────────────────────────────────────────────────────
@@ -152,13 +161,27 @@ function renderGoals() {
   if (list) {
     list.innerHTML = filtered.slice().reverse().map(function (g) {
       var p = g.platform.toLowerCase()[0];
+      var statusBadge = '';
+      if (g.platform === 'Optimizely') {
+        if (g.trackingStatus === 'evaluated') {
+          statusBadge = '<span class="gstatus gstatus-eval" title="Click detected, goal selector matched — but NOT sent to Optimizely (QA/force-variation mode)">Evaluated</span>';
+        } else {
+          statusBadge = '<span class="gstatus gstatus-tracked" title="Beacon sent to Optimizely servers — counts as a real conversion">Tracked</span>';
+        }
+      }
+      // For VWO goals, show full selector as a tooltip on the goal name
+      var goalTitle = '';
+      if (g.platform === 'VWO' && g.vwoSelector) {
+        goalTitle = ' title="Full selector: ' + h(g.vwoSelector) + '"';
+      }
       return '<div class="gc-row">' +
         '<div class="gi"></div>' +
         '<div class="gb">' +
-          '<div class="gn">' + h(g.goalName || g.goalId) + '</div>' +
+          '<div class="gn"' + goalTitle + '>' + h(g.goalName || g.goalId) + '</div>' +
           '<div class="gm">' +
             '<span class="gplat gplat-' + p + '">' + h(g.platform) + '</span>' +
             '<span class="gid">ID: ' + h(g.goalId) + '</span>' +
+            statusBadge +
             '<span class="gt">' + fmtTime(g.timestamp) + '</span>' +
           '</div>' +
         '</div>' +

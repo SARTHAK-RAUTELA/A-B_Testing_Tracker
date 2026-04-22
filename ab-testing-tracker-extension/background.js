@@ -108,6 +108,21 @@ chrome.tabs.onUpdated.addListener(function (tabId, changeInfo) {
   }
 });
 
+// FIX 10: SPAs never trigger status:"loading" on chrome.tabs.onUpdated, so
+// tabCache was never flushed during client-side route changes. The popup would
+// then receive stale experiment data from the previous route on refresh.
+// webNavigation.onHistoryStateUpdated fires on every pushState/replaceState call,
+// which is exactly when a SPA navigates. We clear the cache and notify the panel
+// so both popup and DevTools panel reflect the new page state immediately.
+chrome.webNavigation.onHistoryStateUpdated.addListener(function (details) {
+  // Only handle top-level frame navigations (frameId 0), not iframes
+  if (details.frameId !== 0) return;
+  var tabId = details.tabId;
+  delete tabCache[tabId];
+  chrome.action.setBadgeText({ text: '', tabId: tabId });
+  pushToPanel(tabId, null);
+});
+
 // ── Tab closed ────────────────────────────────────────────────────────────────
 chrome.tabs.onRemoved.addListener(function (tabId) {
   delete tabCache[tabId];
