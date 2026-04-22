@@ -1,4 +1,4 @@
-<img width="138" height="138" alt="Frame 6" src="https://github.com/user-attachments/assets/c7a4de01-79df-42ab-99a0-f1855ad87359" />
+<img width="148" height="138" alt="Frame 6" src="https://github.com/user-attachments/assets/c7a4de01-79df-42ab-99a0-f1855ad87359" />
 
 
 # A/B Testing Tracker — Chrome Extension 
