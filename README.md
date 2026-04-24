@@ -181,4 +181,4 @@ This extension:
 
 ---
 
-*Built by Sarthak Rautela · A/B Testing TRACKER v2.3.0 · Manifest V3*
+*Built by Sarthak Rautela · A/B Testing TRACKER v2.3.5 · Manifest V3.5*
