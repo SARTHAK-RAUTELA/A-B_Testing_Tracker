@@ -6,7 +6,7 @@
 
 > **Real-time A/B test and goal tracking for Convert, Optimizely Web, and VWO**
 >
-> by Sarthak Rautela · v2.3.5 · Manifest V3.5
+> by Sarthak Rautela · v2.3.6 · Manifest V3.6
 
 ---
 
@@ -181,4 +181,4 @@ This extension:
 
 ---
 
-*Built by Sarthak Rautela · A/B Testing TRACKER v2.3.5 · Manifest V3.5*
+*Built by Sarthak Rautela · A/B Testing TRACKER v2.3.6 · Manifest V3.6*
